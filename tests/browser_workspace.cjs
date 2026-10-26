@@ -1,0 +1,80 @@
+const auditMobile=require('./mobile_layout.cjs');
+// Workspace navigation against real isolated SQLite/PDF service. No model calls.
+const {chromium}=require('playwright');
+const {spawn}=require('node:child_process');
+const fs=require('node:fs/promises');
+const path=require('node:path');
+const assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'..');
+const py=process.env.STUDY_PYTHON||path.join(process.env.USERPROFILE,'.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe');
+const base='http://127.0.0.1:18771';let browser,server;
+(async()=>{
+ server=spawn(py,['-B',path.join(root,'app.py'),'--demo','--port','18771','--data-dir',path.join(root,'work','workspace-test-'+Date.now())],{cwd:root,windowsHide:true,stdio:'ignore'});
+ for(let i=0;i<100;i++){try{if((await fetch(base+'/api/config')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
+ const executable=await fs.access(chromium.executablePath()).then(()=>chromium.executablePath()).catch(()=> 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe');
+ browser=await chromium.launch({headless:true,executablePath:executable,env:{...process.env,TEMP:path.join(root,'work'),TMP:path.join(root,'work')}});
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(base);await page.locator('#emptyUpload').waitFor();
+ assert.equal(await page.locator('#masteryPercent').textContent(),'—');
+ assert.equal(await page.locator('#homeNav').getAttribute('aria-current'),'page');
+ assert.equal(await page.locator('#libraryArea').isVisible(),false);
+ const pdf=await fs.readFile(path.join(root,'work','演示参考书_合成测试材料.pdf'));
+ async function upload(name,buffer=pdf){
+   const response=page.waitForResponse(r=>r.url()===base+'/api/books'&&r.request().method()==='POST');
+   await page.locator('#pdfFile').setInputFiles({name,mimeType:'application/pdf',buffer});
+   await response;
+   await page.waitForFunction(title=>!document.getElementById('pdfFile').disabled&&document.getElementById('rangePanel').textContent.includes(title),name.replace(/\.pdf$/i,''));
+ }
+ await upload('Z_传播学基础.pdf');await page.locator('#startStudy').waitFor();
+ await upload('A_新闻学基础.pdf');await page.locator('#startStudy').waitFor();
+ await page.selectOption('#bookSort','title');
+ assert.match(await page.locator('#bookList .book-title').first().textContent(),/^A_/);
+ await page.fill('#bookSearch','传播学');
+ assert.equal(await page.locator('#bookList .book').count(),1);
+ assert.match(await page.locator('#libraryResult').textContent(),/1 \/ 2/);
+ await page.fill('#bookSearch','不存在的资料');
+ await page.locator('#clearBookFilters').click();
+ assert.equal(await page.locator('#bookList .book').count(),2);
+ await page.selectOption('#bookFilter','failed');
+ assert.equal(await page.locator('#bookList .book').count(),0);
+ await page.click('#clearBookFilters');
+ await upload('解析失败样例.pdf',Buffer.from('%PDF-1.4\nnot a valid PDF\n'));
+ await page.waitForFunction(()=>document.querySelector('#rangePanel .notice')?.textContent.includes('解析失败'));
+ await page.selectOption('#bookFilter','failed');
+ assert.equal(await page.locator('#bookList .book').count(),1);
+ assert.equal(await page.locator('[data-retry]').count(),1);
+ await page.selectOption('#bookFilter','ready');
+ assert.equal(await page.locator('#bookList .book').count(),2);
+ await page.selectOption('#bookFilter','processing');
+ assert.equal(await page.locator('#bookList .book').count(),0);
+ await page.selectOption('#bookFilter','all');
+ await page.click('#homeNav');
+ assert.equal(await page.locator('#libraryBadge').textContent(),'3');
+ assert.equal(await page.locator('#recentBooks .recent-book').count(),3);
+ await page.screenshot({path:path.join(root,'work','workspace-overview.png'),fullPage:true});
+ await page.locator('[data-open-book]').filter({hasText:'传播学基础'}).click();
+ await page.locator('#startStudy').waitFor();
+ assert.match(await page.locator('#rangePanel').textContent(),/Z_传播学基础/);
+ assert.equal(await page.locator('#libraryNav').getAttribute('aria-current'),'page');
+ await page.screenshot({path:path.join(root,'work','workspace-library.png'),fullPage:true});
+ for(const width of [1440,1024,768,430,390,360,320]){
+   await page.setViewportSize({width,height:1000});
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Library overflow '+width);await auditMobile(page,'Library '+width);
+   await page.click('#homeNav');
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Overview overflow '+width);await auditMobile(page,'Overview '+width);
+   if(width===390)await page.screenshot({path:path.join(root,'work','workspace-mobile.png'),fullPage:true});
+   await page.click('#libraryNav');
+ }
+ await page.setViewportSize({width:1440,height:1000});
+ await page.click('#homeNav');await page.click('#connectionRefresh');
+ await page.locator('#message').waitFor();
+ assert.match(await page.locator('#message').textContent(),/连接正常/);
+ await page.click('#quickReview');
+ await page.locator('#reviewList .empty-range').waitFor();
+ assert.equal(await page.locator('#reviewNav').getAttribute('aria-current'),'page');
+ assert.match(await page.locator('#reviewList').textContent(),/暂时没有待复习/);
+ const config=await(await fetch(base+'/api/config')).json();assert.equal(config.calls,0);
+ assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({result:'PASS',checks:['空状态与真实统计','资料独立导航','多PDF上传','名称排序','名称搜索与结果数','无结果清除筛选','失败与可学及处理中筛选','失败解析重试入口','最近资料跳转与选择','四种屏宽无溢出','无费用连接检查','复习入口','零模型调用与无JS异常']},null,2));
+})().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{if(browser)await browser.close();if(server)server.kill();});

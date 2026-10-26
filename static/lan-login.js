@@ -1,0 +1,3 @@
+
+'use strict';
+document.getElementById('lanLoginForm').onsubmit=async event=>{event.preventDefault();const button=document.getElementById('lanConnect'),error=document.getElementById('lanError');button.disabled=true;error.textContent='';try{const response=await fetch('/api/lan-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.getElementById('lanCode').value})});const data=await response.json();if(!response.ok)throw Error(data.error||'连接失败');location.replace('/');}catch(e){error.textContent=e.message||'连接失败，请检查电脑服务。';}finally{button.disabled=false;}};
