@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: shizhi-agent
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements-cloud.txt
+    startCommand: gunicorn cloud_app:application --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 180 --access-logfile /dev/null
+    healthCheckPath: /healthz
+    disk:
+      name: shizhi-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: STUDY_DATA_DIR
+        value: /var/data/shizhi
+      - key: SHARE_ACCESS_CODE
+        generateValue: true
+      - key: DEEPSEEK_API_KEY
+        sync: false
